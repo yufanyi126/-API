@@ -1,0 +1,14 @@
+# 数据处理
+pandas>=2.0
+numpy>=1.24
+
+# HTTP 客户端（hithink 官方 REST 数据源需要）
+requests>=2.28
+
+# 配置与日志
+python-dotenv>=1.0
+loguru>=0.7
+
+# （可选）备用数据源，避免没有同花顺时无法测试框架
+# akshare>=1.12
+
