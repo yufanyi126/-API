@@ -164,19 +164,25 @@ class VolumeDivergenceStrategy(BaseStrategy):
 
     def _evaluate(self, stock: StockData) -> Dict:
         lookback = int(self._rule.get("lookback_years", 3))
-        # 用日线缓存重采样成周K
+        # 用日线缓存取数据
         df = self._ds.get_daily_bars(stock.code, years=lookback)
         if df is None or df.empty:
             return {"score": 0.0, "is_strong_divergence": False,
                     "details": {"total_platforms": 0, "compared_platforms": 0,
                                 "divergence_count": 0, "latest_divergence_score": 0.0}}
-        resample = self._rule.get("resample_rule", "W")
-        weekly = (df.set_index("date")
-                  .resample(resample)
-                  .agg({"close": "last", "volume": "sum"})
-                  .dropna())
-        weekly = weekly.reset_index()
-        return compute_divergence_score(weekly, self._rule)
+        data_freq = self._rule.get("data_freq", "D")
+        resample = self._rule.get("resample_rule", "D")
+        if data_freq.upper() == "W":
+            # 周线：按周重采样（收盘取末值，量取和）
+            to_eval = (df.set_index("date")
+                       .resample(resample)
+                       .agg({"close": "last", "volume": "sum"})
+                       .dropna())
+            to_eval = to_eval.reset_index()
+        else:
+            # 日线：直接用日线 OHLCV
+            to_eval = df[["date", "close", "volume"]].copy()
+        return compute_divergence_score(to_eval, self._rule)
 
     def filter(self, stocks: List[StockData]) -> List[StockData]:
         kept: List[StockData] = []

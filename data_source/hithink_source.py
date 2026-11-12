@@ -242,6 +242,60 @@ class HithinkDataSource(DataSourceBase):
         )
         return s.sort_index().tail(days)
 
+    # ---------------- 通用多周期K线(日/周/60分钟等) ----------------
+    def _fetch_ohlcv(self, code: str, interval: str = "1d",
+                     start_ms: int = None, end_ms: int = None,
+                     limit: int = None) -> Optional[pd.DataFrame]:
+        """按 interval 拉历史 OHLCV。interval 形如 '1d'/'1w'/'60m'/'15m'。
+
+        返回 DataFrame 列为 [date, open, high, low, close, volume, turnover]。
+        """
+        thscode = _full_thscode(code)
+        end_ms = end_ms or int(time.time() * 1000)
+        params = {
+            "thscode": thscode,
+            "interval": interval,
+            "adjust": "forward",
+            "end": end_ms,
+        }
+        if start_ms is not None:
+            params["start"] = start_ms
+        data = self._get("/api/a-share/prices/historical", params)
+        items = (data or {}).get("item") or []
+        if not items:
+            return None
+        df = pd.DataFrame(items)
+        df["date"] = pd.to_datetime(df["date_ms"], unit="ms")
+        rename = {
+            "open_price": "open", "high_price": "high", "low_price": "low",
+            "close_price": "close", "volume": "volume", "turnover": "turnover",
+            "date_ms": "date_ms",
+        }
+        df = df.rename(columns=rename)
+        keep = [c for c in ["date", "open", "high", "low", "close",
+                            "volume", "turnover"] if c in df.columns]
+        for col in keep[1:]:
+            df[col] = pd.to_numeric(df[col], errors="coerce")
+        df = df[keep].dropna()
+        df = df.sort_values("date").reset_index(drop=True)
+        if limit is not None:
+            df = df.tail(limit).reset_index(drop=True)
+        return df
+
+    def get_kline(self, code: str, interval: str = "1d",
+                  limit: int = None, days: int = None) -> Optional[pd.DataFrame]:
+        """公开入口：取某周期最近 N 根K线。
+
+        limit: 返回最近多少根；days: 回溯多少天（用于周K/月K等较长跨度）。
+        至少给其中之一；两者都给时限数取 limit。
+        """
+        end_ms = int(time.time() * 1000)
+        start_ms = None
+        if days:
+            start_ms = end_ms - days * 24 * 3600 * 1000
+        return self._fetch_ohlcv(code, interval=interval,
+                                 start_ms=start_ms, end_ms=end_ms, limit=limit)
+
     def get_daily_bars(self, code: str, years: int = 3) -> Optional[pd.DataFrame]:
         """获取某只股票近 N 年的前复权日线 OHLCV 数据（带本地缓存 + 增量更新）。
 
@@ -368,6 +422,13 @@ def _full_thscode(code: str) -> str:
         return f"{code}.SH"
     if code.startswith(("0", "3")):
         return f"{code}.SZ"
+    # 沪市基金/ETF：50x/51x/56x/58x 等 5 开头（上交所场内基金）
+    if code.startswith("5"):
+        return f"{code}.SH"
+    # 深市基金/ETF（LOF等）：15/16/18 开头（深交所场内基金）
+    if code.startswith(("15", "16", "18")):
+        return f"{code}.SZ"
+    # 北交所股票：4x / 8x
     if code.startswith(("4", "8")):
         return f"{code}.BJ"
     return f"{code}.SH"  # 兜底
